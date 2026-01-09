@@ -6,11 +6,19 @@
 import array
 from audiobusio import I2SOut
 import audiocore
-from board import I2C, I2S_BCLK, I2S_DIN, I2S_MCLK, I2S_WS
+from board import (
+    CKP, CKN, D0P, D0N, D1P, D1N, D2P, D2N,
+    I2C, I2S_BCLK, I2S_DIN, I2S_MCLK, I2S_WS
+)
 import digitalio
+import displayio
+import framebufferio
+import gc
 from micropython import const
+import picodvi
 from pwmio import PWMOut
 import struct
+import supervisor
 import time
 
 from adafruit_tlv320 import TLV320DAC3100
@@ -18,6 +26,25 @@ from adafruit_tlv320 import TLV320DAC3100
 
 # I2S MCLK clock frequency
 MCLK_HZ = const(15_000_000)
+
+
+def init_display(width, height, color_depth):
+    # Initialize the picodvi display
+    # Video mode compatibility:
+    # | Video Mode     | Fruit Jam | Metro RP2350 No PSRAM    |
+    # | -------------- | --------- | ------------------------ |
+    # | (320, 240,  8) | Yes!      | Yes!                     |
+    # | (320, 240, 16) | Yes!      | Yes!                     |
+    # | (320, 240, 32) | Yes!      | MemoryError exception :( |
+    # | (640, 480,  8) | Yes!      | MemoryError exception :( |
+    displayio.release_displays()
+    gc.collect()
+    fb = picodvi.Framebuffer(width, height, clk_dp=CKP, clk_dn=CKN,
+        red_dp=D0P, red_dn=D0N, green_dp=D1P, green_dn=D1N,
+        blue_dp=D2P, blue_dn=D2N, color_depth=color_depth)
+    display = framebufferio.FramebufferDisplay(fb)
+    supervisor.runtime.display = display
+    return display
 
 
 def configure_dac(i2c, sample_rate, mclk_hz):
@@ -62,19 +89,19 @@ def load_au_file(filename):
         if magic != 0x2e736e64:
             raise ValueError("Not an AU file (magic bytes are wrong)")
         if encoding != 1:
-            raise ValueError("AU file sample encoding is not µ-law")
+            raise ValueError("AU file sample encoding is not u-law")
         if rate != 8000 or channels != 1:
             raise ValueError("AU file is not 8000 Hz mono")
         if size == 0xffffffff:
             raise ValueError("AU file with header.size=-1 is not supported")
 
         t0 = time.monotonic()
-        print(" t = 0.000")
+        print("t = 0.000")
 
         # Pre-allocate output buffer (16-bit LPCM)
         pcm = array.array("h", bytearray(size * 2))
         t1 = time.monotonic()
-        print(f"∆t = {t1-t0:.3f}: pre-allocated PCM buffer")
+        print(f"delta-t = {t1-t0:.3f}: pre-allocated PCM buffer")
 
         # Generate µ-law lookup table
         lut = array.array("h", bytearray(512))  # 'h' = int16
@@ -88,7 +115,7 @@ def load_au_file(filename):
             lut[i] = -s if sign else s
         lut_mv = memoryview(lut)
         t2 = time.monotonic()
-        print(f"∆t = {t2-t1:.3f}: generated µ-law LUT")
+        print(f"delta-t = {t2-t1:.3f}: generated u-law LUT")
 
         # Seek to start of audio data
         f.seek(offset)
@@ -104,12 +131,29 @@ def load_au_file(filename):
                 pcm[i + j] = lut_mv[data_mv[j]]
             i += len(data_mv)
         t3 = time.monotonic()
-        print(f"∆t = {t3-t2:.3f}: decoded µ-law samples to PCM")
+        print(f"delta-t = {t3-t2:.3f}: decoded u-law samples to PCM")
 
         return pcm
 
 
 def run():
+    # Ensure display is low-res to leave enough RAM for audio sample buffers
+    # The delays here are to let my video capture card sync after a reset
+    print("One moment please...")
+    gc.collect()
+    time.sleep(2)
+    init_display(320, 240, 16)
+    gc.collect()
+
+    # Print startup banner
+    print("""
+Fruit Jam AU file player (8kHz 8-bit mono u-law)
+- CAUTION: Default volume is LINE LEVEL
+- For headphones, edit code.py to set
+  `dac.headphone_volume = -24`
+- To convert WAV to AU with sox:
+  `sox demo.wav -r 8000 -t au -e mu-law demo.au`
+""")
 
     # Set up I2C and I2S buses
     i2c = I2C()
@@ -120,6 +164,7 @@ def run():
 
     # Initialize DAC for 8 kHz sample rate
     dac = configure_dac(i2c, 8000, MCLK_HZ)
+    time.sleep(1)  # ensure volume has stabilized
 
     # Load 8-bit µ-law samples from .au file into a 16-bit LPCM buffer
     pcm = load_au_file("demo.au")
@@ -133,21 +178,14 @@ def run():
     print()
     while True:
         print("\rPlaying 8-bit AU ...  ", end='')
+        time.sleep(0.5)
         audio.play(au)
         time.sleep(play_time + 1)
         print("\rPlaying 16-bit WAV ...", end='')
+        time.sleep(0.5)
         audio.play(wav)
         time.sleep(play_time + 1)
 
-
-# Print startup banner
-print("""
-Fruit Jam AU file player (8000 Hz, 8-bit mono, µ-law encoded)
-- CAUTION: Default volume is LINE LEVEL
-- For headphones, edit code.py to set `dac.headphone_volume = -24`
-- To convert 16-bit WAV to 8-bit µ-law encoded AU with sox on Linux:
-  `sox demo.wav -r 8000 -t au -e mu-law demo.au`
-""")
 
 # Run the demo
 run()
