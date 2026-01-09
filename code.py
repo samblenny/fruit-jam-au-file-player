@@ -83,7 +83,7 @@ def load_au_file(filename):
             sign = u & 0x80
             exp = (u >> 4) & 0x07
             mant = u & 0x0F
-            s = ((mant << 4) + 0x08) << exp
+            s = ((mant << 3) + 0x84) << exp
             s -= 0x84
             lut[i] = -s if sign else s
         lut_mv = memoryview(lut)
@@ -123,13 +123,20 @@ def run():
 
     # Load 8-bit µ-law samples from .au file into a 16-bit LPCM buffer
     pcm = load_au_file("demo.au")
-    samples = audiocore.RawSample(pcm, channel_count=1, sample_rate=8000)
+    au = audiocore.RawSample(pcm, channel_count=1, sample_rate=8000)
     play_time = len(pcm) / 8000  # length of audio clip in seconds
 
+    # Load 16-bit WAV version
+    wav = audiocore.WaveFile("demo_16bit.wav")
+
     # Play demo file on loop
-    print("\nPlaying demo.au ...")
+    print()
     while True:
-        audio.play(samples)
+        print("\rPlaying 8-bit AU ...  ", end='')
+        audio.play(au)
+        time.sleep(play_time + 1)
+        print("\rPlaying 16-bit WAV ...", end='')
+        audio.play(wav)
         time.sleep(play_time + 1)
 
 
