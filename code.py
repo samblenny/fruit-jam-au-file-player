@@ -3,6 +3,7 @@
 #
 # See NOTES.md for documentation links
 #
+import array
 from audiobusio import I2SOut
 import audiocore
 from board import I2C, I2S_BCLK, I2S_DIN, I2S_MCLK, I2S_WS
@@ -11,7 +12,6 @@ from micropython import const
 from pwmio import PWMOut
 import struct
 import time
-import ulab.numpy as np
 
 from adafruit_tlv320 import TLV320DAC3100
 
@@ -68,12 +68,16 @@ def load_au_file(filename):
         if size == 0xffffffff:
             raise ValueError("AU file with header.size=-1 is not supported")
 
+        t0 = time.monotonic()
+        print(" t = 0.000")
+
         # Pre-allocate output buffer (16-bit LPCM)
-        pcm = np.zeros(size, dtype=np.int16)
-        print(f"DEBUG: size:{size} len(pcm):{len(pcm)}")
+        pcm = array.array("h", bytearray(size * 2))
+        t1 = time.monotonic()
+        print(f"∆t = {t1-t0:.3f}: pre-allocated PCM buffer")
 
         # Generate µ-law lookup table
-        lut = np.zeros(256, dtype=np.int16)
+        lut = array.array("h", bytearray(512))  # 'h' = int16
         for i in range(256):
             u = (~i) & 0xFF
             sign = u & 0x80
@@ -82,6 +86,9 @@ def load_au_file(filename):
             s = ((mant << 4) + 0x08) << exp
             s -= 0x84
             lut[i] = -s if sign else s
+        lut_mv = memoryview(lut)
+        t2 = time.monotonic()
+        print(f"∆t = {t2-t1:.3f}: generated µ-law LUT")
 
         # Seek to start of audio data
         f.seek(offset)
@@ -92,10 +99,12 @@ def load_au_file(filename):
             data = f.read(min(1024, size - i))
             if not data:
                 raise ValueError("Truncated AU file data")
-            samples = np.frombuffer(data, dtype=np.uint8)
-            for j, b in enumerate(samples):
-                pcm[i + j] = lut[b]
-            i += len(data)
+            data_mv = memoryview(data)
+            for j in range(len(data_mv)):
+                pcm[i + j] = lut_mv[data_mv[j]]
+            i += len(data_mv)
+        t3 = time.monotonic()
+        print(f"∆t = {t3-t2:.3f}: decoded µ-law samples to PCM")
 
         return pcm
 
@@ -118,7 +127,7 @@ def run():
     play_time = len(pcm) / 8000  # length of audio clip in seconds
 
     # Play demo file on loop
-    time.sleep(0.5)
+    print("\nPlaying demo.au ...")
     while True:
         audio.play(samples)
         time.sleep(play_time + 1)
@@ -126,10 +135,10 @@ def run():
 
 # Print startup banner
 print("""
-Fruit Jam AU file player (8000 hz, 8-bit mono, µ-law companded samples)
+Fruit Jam AU file player (8000 Hz, 8-bit mono, µ-law encoded)
 - CAUTION: Default volume is LINE LEVEL
 - For headphones, edit code.py to set `dac.headphone_volume = -24`
-- To convert a 16-bit .wav file to an 8-bit µ-law .au file with sox on Linux:
+- To convert 16-bit WAV to 8-bit µ-law encoded AU with sox on Linux:
   `sox demo.wav -r 8000 -t au -e mu-law demo.au`
 """)
 
