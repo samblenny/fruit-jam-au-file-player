@@ -2,8 +2,6 @@
 <!-- SPDX-FileCopyrightText: Copyright 2026 Sam Blenny -->
 # Fruit Jam AU File Player
 
-**DRAFT: WORK IN PROGRESS**
-
 Load and play 8-bit µ-law encoded audio samples from an AU file on Fruit Jam.
 
 
